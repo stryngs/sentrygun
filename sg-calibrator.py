@@ -3,6 +3,7 @@ import json
 import os
 import cPickle
 import time
+import wifiEssentials as WE
 
 from argparse import ArgumentParser
 from multiprocessing import Process
@@ -10,7 +11,6 @@ from configs import *
 
 def channel_hopper():
 
-    import sniffer
     while True:
 
         for channel in xrange(1, 14):
@@ -24,10 +24,18 @@ def set_configs():
     parser = ArgumentParser()
 
     parser.add_argument('-i',
-                    dest='iface',
-                    required=True,
-                    type=str,
-                    help='Specify network interface to use')
+                        dest = 'iface',
+                        required = True,
+                        type = str,
+                        help = 'Specify network interface to use')
+    parser.add_argument('-d',
+                        choices = ['ath9k',
+                                   'ath9k_htc',
+                                   'rt2800usb',
+                                   'unknown',
+                                   'wl12xx'],
+                        help = 'driver choice',
+                        required = True)
 
     return parser.parse_args().__dict__
 
@@ -35,6 +43,9 @@ if __name__ == '__main__':
 
     configs = set_configs()
     interface = configs['iface']
+
+    ## Use wifiEssentials to determine and keep track of our 802.11 driver
+    nicDriver = WE.Unify(configs.get('d'))
 
     whitelist = {}
     calibration_table = {
@@ -44,47 +55,46 @@ if __name__ == '__main__':
             'ssids' : {},
     }
 
-    hopper = Process(target=channel_hopper, args=())
+    hopper = Process(target = channel_hopper, args = ())
     hopper.daemon = True
     hopper.start()
 
-    with open('whitelist.txt') as fd:
+    with open('whitelist.txt', 'r') as fd:
+        fd = list(set([i for i in fd.read().splitlines() if i]))
     
-        for line in fd:
-    
-            line = line.split()
-            ssid = line[0]
-            bssid = line[1].lower()
-    
-            if ssid in whitelist:
-                whitelist[ssid].add(bssid)
-                calibration_table['ssids'][ssid]['bssids'][bssid] = {
+    for line in fd:
+        ssid = line[0]
+        bssid = line[1].lower()
+
+        if ssid in whitelist:
+            whitelist[ssid].add(bssid)
+            calibration_table['ssids'][ssid]['bssids'][bssid] = {
+                                        'calibrated' : False,
+                                        'packets' : [],
+                                        'len' : 0,
+                                    }
+            calibration_table['ssids'][ssid]['len'] += 1
+
+        else:
+            whitelist[ssid] = set()
+            whitelist[ssid].add(bssid)
+            calibration_table['ssids'][ssid] = {
+                                    'bssids' : {
+                                        bssid : {
                                             'calibrated' : False,
                                             'packets' : [],
                                             'len' : 0,
-                                        }
-                calibration_table['ssids'][ssid]['len'] += 1
+                                        }, 
+                                    },
+                                    'calibrated_count' : 0,
+                                    'calibrated' : False,
+                                    'len' : 1,
+            }
+            calibration_table['len'] += 1
     
-            else:
-                whitelist[ssid] = set()
-                whitelist[ssid].add(bssid)
-                calibration_table['ssids'][ssid] = {
-                                        'bssids' : {
-                                            bssid : {
-                                                'calibrated' : False,
-                                                'packets' : [],
-                                                'len' : 0,
-                                            }, 
-                                        },
-                                        'calibrated_count' : 0,
-                                        'calibrated' : False,
-                                        'len' : 1,
-                }
-                calibration_table['len'] += 1
+    probe_responses = sniffer.response_sniffer(interface, nicDriver)
     
-    probe_responses = sniffer.response_sniffer(interface)
-    
-    print json.dumps(calibration_table, indent=4, sort_keys=True)
+    print json.dumps(calibration_table, indent = 4, sort_keys = True)
     
     for response in probe_responses:
     
@@ -121,7 +131,7 @@ if __name__ == '__main__':
                                     calibration_table['calibrated'] = True
                                     break
     
-            print json.dumps(calibration_table, indent=4, sort_keys=True)
+            print json.dumps(calibration_table, indent = 4, sort_keys = True)
 
     ssids = calibration_table['ssids']
     for s in ssids:
@@ -150,6 +160,6 @@ if __name__ == '__main__':
 
         cPickle.dump(whitelist, fd)
     
-    print json.dumps(calibration_table, indent=4, sort_keys=True)
+    print json.dumps(calibration_table, indent = 4, sort_keys = True)
 
     hopper.terminate()

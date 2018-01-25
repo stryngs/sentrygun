@@ -13,6 +13,7 @@ import mmh3
 import os
 import sys
 import cPickle
+import wifiEssentials as WE
 
 from multiprocessing import Queue, Process
 from collections import deque
@@ -233,17 +234,13 @@ def listener(configs):
     except KeyboardInterrupt:
         pass
 
-def detect_rogue_ap_attacks():
-
+def detect_rogue_ap_attacks(nicDriver):
     import sniffer
-
     responding_aps = {}
     try:
-
-        probe_responses = sniffer.response_sniffer(interface)
+        probe_responses = sniffer.response_sniffer(interface, nicDriver)
 
         for response in probe_responses:
-        
             ssid = response['essid']
             bssid = response['addr3'].lower()
             channel = response['channel']
@@ -252,11 +249,8 @@ def detect_rogue_ap_attacks():
             print '[probe Response]', ssid, bssid, response['tx'], channel
 
             if configs['evil_twin'] and ssid in whitelist:
-
                 if bssid not in whitelist[ssid]:
-
                     print '[anomaly] %s has ssid: %s but not in whitelist' % (bssid, ssid)
-
                     alert = alert_factory(location=DEVICE_NAME,
                                         bssid=bssid,
                                         channel=response['channel'],
@@ -266,14 +260,11 @@ def detect_rogue_ap_attacks():
                     shitlist.put(alert)
 
                 else:
-
                     ap = calibration_table['ssids'][ssid]['bssids'][bssid]
-
                     upper_bound = ap['upper_bound']
                     lower_bound = ap['lower_bound']
 
                     if tx > upper_bound or tx < lower_bound:
-
                         print '[anomaly] Illegal tx varation: %s ' % bssid
                         alert = alert_factory(location=DEVICE_NAME,
                                             bssid=bssid,
@@ -285,20 +276,14 @@ def detect_rogue_ap_attacks():
                         shitlist.put(alert)
 
             elif configs['karma']:
-
                 if bssid in responding_aps:
-                     
                     responding_aps[bssid].add(ssid)
-
                 else:
-                
                     responding_aps[bssid] = set([])
                     responding_aps[bssid].add(ssid)
 
                 if len(responding_aps[bssid]) > 1:
-
                     print '[anomaly] %s has sent probe responses for %d SSIDs' % (bssid, len(responding_aps[bssid]))
-
                     alert = alert_factory(location=DEVICE_NAME,
                                         bssid=bssid,
                                         channel=response['channel'],
@@ -350,6 +335,15 @@ def set_configs():
                     default=80,
                     type=int,
                     help='Send data to server listening on this port')
+
+    parser.add_argument('-d',
+                        choices = ['ath9k',
+                                   'ath9k_htc',
+                                   'rt2800usb',
+                                   'unknown',
+                                   'wl12xx'],
+                        help = 'driver choice',
+                        required = True)
 
     parser.add_argument('--evil-twin',
                     dest='evil_twin',
@@ -423,8 +417,10 @@ if __name__ == '__main__':
 
     daemons = []
     try:
-    
-        daemons.append(Process(target=detect_rogue_ap_attacks, args=()))
+        ## Use wifiEssentials to determine and keep track of our 802.11 driver
+        nicDriver = WE.Unify(configs.get('d'))
+        
+        daemons.append(Process(target=detect_rogue_ap_attacks(nicDriver), args=()))
 
         if configs['canary']:
             canary_configs = configs['canary'].split(':')
